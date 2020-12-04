@@ -33,6 +33,12 @@
 
 #include <time.h>
 
+// added libriaries
+#include <pthread.h>
+#include <sched.h>
+#include <sys/sysinfo.h>
+
+
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
 #define HRES 640
@@ -40,25 +46,19 @@
 #define HRES_STR "640"
 #define VRES_STR "480"
 
-//#define HRES 320
-//#define VRES 240
-//#define HRES_STR "320"
-//#define VRES_STR "240"
-
 #define START_UP_FRAMES (8)
 #define LAST_FRAMES (1)
 #define CAPTURE_FRAMES (1800+LAST_FRAMES)
 #define FRAMES_TO_ACQUIRE (CAPTURE_FRAMES + START_UP_FRAMES + LAST_FRAMES)
 
 #define FRAMES_PER_SEC (1) 
-//#define FRAMES_PER_SEC (10) 
-//#define FRAMES_PER_SEC (20) 
-//#define FRAMES_PER_SEC (25) 
-//#define FRAMES_PER_SEC (30) 
 
-//#define COLOR_CONVERT_RGB
-//#define SHARPEN_RGB
 #define DUMP_FRAMES
+
+// extra defines
+#define NUM_THREADS (1)
+#define NUM_CPUS (4)
+
 
 // Format is used by a number of functions, so made as a file global
 static struct v4l2_format fmt;
@@ -77,8 +77,6 @@ struct buffer
 };
 
 static char            *dev_name;
-//static enum io_method   io = IO_METHOD_USERPTR;
-//static enum io_method   io = IO_METHOD_READ;
 static enum io_method   io = IO_METHOD_MMAP;
 static int              fd = -1;
 struct buffer          *buffers;
@@ -92,6 +90,82 @@ unsigned char R[HRES*VRES], G[HRES*VRES], B[HRES*VRES], convR[HRES*VRES], convG[
 
 static double fnow=0.0, fstart=0.0, fstop=0.0;
 static struct timespec time_now, time_start, time_stop;
+
+// global pointer so that side thread can read main thread state
+int *a = 0;
+ 
+typedef struct
+{
+    int threadIdx;
+} threadParams_t;
+
+
+// POSIX thread declarations and scheduling attributes
+//
+pthread_t threads[NUM_THREADS];
+threadParams_t threadParams[NUM_THREADS];
+pthread_attr_t rt_sched_attr[NUM_THREADS];
+int rt_max_prio, rt_min_prio;
+struct sched_param rt_param[NUM_THREADS];
+struct sched_param main_param;
+pthread_attr_t main_attr;
+pid_t mainpid;
+
+
+// measure frequency
+void *freq_test(void *)
+{
+  struct timespec new_start, new_stop;
+  clock_gettime(CLOCK_MONOTONIC, &new_start);
+  double nstart = (double)new_start.tv_nsec / 1000000000.0;
+  clock_gettime(CLOCK_MONOTONIC, &new_stop);
+  double nstop = (double)new_stop.tv_nsec / 1000000000.0;
+  
+  while(1)
+  {
+    clock_gettime(CLOCK_MONOTONIC, &new_stop);
+    nstop = (double)new_stop.tv_nsec / 1000000000.0;
+    
+    if(*a)
+    {
+      printf("frequency: %d \n", (nstop-nstart));
+      clock_gettime(CLOCK_MONOTONIC, &new_start);
+      nstart = (double)new_start.tv_nsec / 1000000000.0;
+    }
+  }
+}
+
+void print_scheduler(void)
+{
+   int schedType, scope;
+
+   schedType = sched_getscheduler(getpid());
+
+   switch(schedType)
+   {
+     case SCHED_FIFO:
+           printf("Pthread Policy is SCHED_FIFO\n");
+           break;
+     case SCHED_OTHER:
+           printf("Pthread Policy is SCHED_OTHER\n");
+       break;
+     case SCHED_RR:
+           printf("Pthread Policy is SCHED_OTHER\n");
+           break;
+     default:
+       printf("Pthread Policy is UNKNOWN\n");
+   }
+
+   pthread_attr_getscope(&main_attr, &scope);
+
+   if(scope == PTHREAD_SCOPE_SYSTEM)
+     printf("PTHREAD SCOPE SYSTEM\n");
+   else if (scope == PTHREAD_SCOPE_PROCESS)
+     printf("PTHREAD SCOPE PROCESS\n");
+   else
+     printf("PTHREAD SCOPE UNKNOWN\n");
+
+}
 
 static void errno_exit(const char *s)
 {
@@ -111,45 +185,6 @@ static int xioctl(int fh, int request, void *arg)
 
         return r;
 }
-
-char ppm_header[]="P6\n#9999999999 sec 9999999999 msec \n"HRES_STR" "VRES_STR"\n255\n";
-char ppm_dumpname[]="frames/test0000.ppm";
-
-static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
-{
-    int written, i, total, dumpfd;
-   
-    snprintf(&ppm_dumpname[11], 9, "%04d", tag);
-    strncat(&ppm_dumpname[15], ".ppm", 5);
-    dumpfd = open(ppm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
-
-    snprintf(&ppm_header[4], 11, "%010d", (int)time->tv_sec);
-    strncat(&ppm_header[14], " sec ", 5);
-    snprintf(&ppm_header[19], 11, "%010d", (int)((time->tv_nsec)/1000000));
-    strncat(&ppm_header[29], " msec \n"HRES_STR" "VRES_STR"\n255\n", 19);
-
-    // subtract 1 from sizeof header because it includes the null terminator for the string
-    written=write(dumpfd, ppm_header, sizeof(ppm_header)-1);
-
-    total=0;
-
-    do
-    {
-        //written=write(dumpfd, &p[total], size);
-        written=write(dumpfd, p, size);
-        total+=written;
-	printf("written=%d, size=%d\n", written, size);
-
-    } while(total < size);
-
-    clock_gettime(CLOCK_MONOTONIC, &time_now);
-    fnow = (double)time_now.tv_sec + (double)time_now.tv_nsec / 1000000000.0;
-    printf("Frame written to flash at %lf, %d, bytes\n", (fnow-fstart), total);
-
-    close(dumpfd);
-    
-}
-
 
 char pgm_header[]="P5\n#9999999999 sec 9999999999 msec \n"HRES_STR" "VRES_STR"\n255\n";
 char pgm_dumpname[]="frames/test0000.pgm";
@@ -290,97 +325,8 @@ static void process_image(const void *p, int size)
 #endif
     }
 
-    else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV)
-    {
-
-#if defined(COLOR_CONVERT_RGB)
-       
-        // Pixels are YU and YV alternating, so YUYV which is 4 bytes
-        // We want RGB, so RGBRGB which is 6 bytes
-        //
-        for(i=0, newi=0; i<size; i=i+4, newi=newi+6)
-        {
-            y_temp=(int)pptr[i]; u_temp=(int)pptr[i+1]; y2_temp=(int)pptr[i+2]; v_temp=(int)pptr[i+3];
-            yuv2rgb(y_temp, u_temp, v_temp, &bigbuffer[newi], &bigbuffer[newi+1], &bigbuffer[newi+2]);
-            yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[newi+3], &bigbuffer[newi+4], &bigbuffer[newi+5]);
-        }
-
-
-#ifdef SHARPEN_RGB
-	// Sharpen computation
-	for(i=0, newi=0; newi < ((size*6)/4); i++, newi+=3)
-	{
-	    R[i]=bigbuffer[newi];
-	    G[i]=bigbuffer[newi+1];
-	    B[i]=bigbuffer[newi+2];
-	}
-    
-        // Skip first and last row, no neighbors to convolve with
-        for(i=1; i<((VRES)-1); i++)
-        {
-
-            // Skip first and last column, no neighbors to convolve with
-            for(j=1; j<((HRES)-1); j++)
-            {
-                temp=0;
-                temp += (PSF[0] * (double)R[((i-1)*HRES)+j-1]);
-                temp += (PSF[1] * (double)R[((i-1)*HRES)+j]);
-                temp += (PSF[2] * (double)R[((i-1)*HRES)+j+1]);
-                temp += (PSF[3] * (double)R[((i)*HRES)+j-1]);
-                temp += (PSF[4] * (double)R[((i)*HRES)+j]);
-                temp += (PSF[5] * (double)R[((i)*HRES)+j+1]);
-                temp += (PSF[6] * (double)R[((i+1)*HRES)+j-1]);
-                temp += (PSF[7] * (double)R[((i+1)*HRES)+j]);
-                temp += (PSF[8] * (double)R[((i+1)*HRES)+j+1]);
-
-                if(temp<0.0) temp=0.0;
-                if(temp>255.0) temp=255.0;
-                convR[(i*HRES)+j]=(unsigned char)temp;
-
-                temp=0;
-                temp += (PSF[0] * (double)G[((i-1)*HRES)+j-1]);
-                temp += (PSF[1] * (double)G[((i-1)*HRES)+j]);
-                temp += (PSF[2] * (double)G[((i-1)*HRES)+j+1]);
-                temp += (PSF[3] * (double)G[((i)*HRES)+j-1]);
-                temp += (PSF[4] * (double)G[((i)*HRES)+j]);
-                temp += (PSF[5] * (double)G[((i)*HRES)+j+1]);
-                temp += (PSF[6] * (double)G[((i+1)*HRES)+j-1]);
-                temp += (PSF[7] * (double)G[((i+1)*HRES)+j]);
-                temp += (PSF[8] * (double)G[((i+1)*HRES)+j+1]);
-
-                if(temp<0.0) temp=0.0;
-                if(temp>255.0) temp=255.0;
-                convG[(i*HRES)+j]=(unsigned char)temp;
-
-                temp=0;
-                temp += (PSF[0] * (double)B[((i-1)*HRES)+j-1]);
-                temp += (PSF[1] * (double)B[((i-1)*HRES)+j]);
-                temp += (PSF[2] * (double)B[((i-1)*HRES)+j+1]);
-                temp += (PSF[3] * (double)B[((i)*HRES)+j-1]);
-                temp += (PSF[4] * (double)B[((i)*HRES)+j]);
-                temp += (PSF[5] * (double)B[((i)*HRES)+j+1]);
-                temp += (PSF[6] * (double)B[((i+1)*HRES)+j-1]);
-                temp += (PSF[7] * (double)B[((i+1)*HRES)+j]);
-                temp += (PSF[8] * (double)B[((i+1)*HRES)+j+1]);
-
-                if(temp<0.0) temp=0.0;
-                if(temp>255.0) temp=255.0;
-                convB[(i*HRES)+j]=(unsigned char)temp;
-            }
-        }
-
-#endif
-
-#endif
-
 
 #ifdef DUMP_FRAMES	
-        if(framecnt > -1) 
-        {
-            dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
-            printf("Dump YUYV converted to RGB size %d\n", size);
-        }
-
 
         // Pixels are YU and YV alternating, so YUYV which is 4 bytes
         // We want Y, so YY which is 2 bytes
@@ -399,21 +345,6 @@ static void process_image(const void *p, int size)
         }
 #endif
 
-
-    }
-
-    else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24)
-    {
-#ifdef DUMP_FRAMES
-        printf("Dump RGB as-is size %d\n", size);
-        dump_ppm(p, size, framecnt, &frame_time);
-#endif
-    }
-
-    else
-    {
-        printf("ERROR - unknown dump format\n");
-    }
 
 
 }
@@ -535,31 +466,9 @@ static void mainloop(void)
     // of frame acquitision and storage.
     //
   
-#if (FRAMES_PER_SEC  == 1)
     printf("Running at 1 frame/sec\n");
     read_delay.tv_sec=1;
     read_delay.tv_nsec=0;
-#elif (FRAMES_PER_SEC == 10)
-    printf("Running at 10 frames/sec\n");
-    read_delay.tv_sec=0;
-    read_delay.tv_nsec=100000000;
-#elif (FRAMES_PER_SEC == 20)
-    printf("Running at 20 frames/sec\n");
-    read_delay.tv_sec=0;
-    read_delay.tv_nsec=49625000;
-#elif (FRAMES_PER_SEC == 25)
-    printf("Running at 25 frames/sec\n");
-    read_delay.tv_sec=0;
-    read_delay.tv_nsec=39625000;
-#elif (FRAMES_PER_SEC == 30)
-    printf("Running at 30 frames/sec\n");
-    read_delay.tv_sec=0;
-    read_delay.tv_nsec=33333333;
-#else
-    printf("Running at 1 frame/sec\n");
-    read_delay.tv_sec=1;
-    read_delay.tv_nsec=0;
-#endif
 
     count = frame_count;
 
@@ -936,10 +845,10 @@ static void init_device(void)
         // Specify the Pixel Coding Formate here
 
         // This one works for Logitech C200
-        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+        //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
 
         //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
-        //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_VYUY;
+        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_VYUY;
 
         // Would be nice if camera supported
         //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_GREY;
@@ -1115,7 +1024,51 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
         }
     }
+    
+    int rc, idx;
 
+   printf("This system has %d processors with %d available\n", get_nprocs_conf(), get_nprocs());
+   printf("The test thread created will be SCHED_FIFO is run with sudo and will be run on least busy core\n");
+
+   mainpid=getpid();
+
+   rt_max_prio = sched_get_priority_max(SCHED_FIFO);
+   rt_min_prio = sched_get_priority_min(SCHED_FIFO);
+
+   print_scheduler();
+   rc=sched_getparam(mainpid, &main_param);
+   main_param.sched_priority=rt_max_prio;
+
+   if(rc=sched_setscheduler(getpid(), SCHED_FIFO, &main_param) < 0)
+	   perror("******** WARNING: sched_setscheduler");
+
+   print_scheduler();
+
+
+   printf("rt_max_prio=%d\n", rt_max_prio);
+   printf("rt_min_prio=%d\n", rt_min_prio);
+
+
+   for(idx=0; idx < NUM_THREADS; idx++)
+   {
+       rc=pthread_attr_init(&rt_sched_attr[idx]);
+       rc=pthread_attr_setinheritsched(&rt_sched_attr[idx], PTHREAD_EXPLICIT_SCHED);
+       rc=pthread_attr_setschedpolicy(&rt_sched_attr[idx], SCHED_FIFO);
+
+       rt_param[idx].sched_priority=rt_max_prio-idx-1;
+       pthread_attr_setschedparam(&rt_sched_attr[idx], &rt_param[idx]);
+
+       threadParams[idx].threadIdx=idx;
+
+       pthread_create(&threads[idx],               // pointer to thread descriptor
+                      &rt_sched_attr[idx],         // use SPECIFIC SECHED_FIFO attributes
+                      freq_test,               // thread function entry point
+                      (void *)&(threadParams[idx]) // parameters to pass in
+                     );
+
+   }
+
+   
     // initialization of V4L2
     open_device();
     init_device();
@@ -1132,6 +1085,7 @@ int main(int argc, char **argv)
 
     uninit_device();
     close_device();
+    printf("\nTEST COMPLETE\n");
     fprintf(stderr, "\n");
     return 0;
 }
