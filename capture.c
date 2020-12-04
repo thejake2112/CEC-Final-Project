@@ -1,18 +1,3 @@
-/*
- *
- *  Adapted by Sam Siewert for use with UVC web cameras and Bt878 frame
- *  grabber NTSC cameras to acquire digital video from a source,
- *  time-stamp each frame acquired, save to a PGM or PPM file.
- *
- *  The original code adapted was open source from V4L2 API and had the
- *  following use and incorporation policy:
- * 
- *  This program can be used and distributed without restrictions.
- *
- *      This program is provided with the V4L2 API
- * see http://linuxtv.org/docs.php for more information
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,7 +98,7 @@ pid_t mainpid;
 
 
 // measure frequency
-void *freq_test(void *)
+void *frequency_test(void*)
 {
   struct timespec new_start, new_stop;
   clock_gettime(CLOCK_MONOTONIC, &new_start);
@@ -126,11 +111,12 @@ void *freq_test(void *)
     clock_gettime(CLOCK_MONOTONIC, &new_stop);
     nstop = (double)new_stop.tv_nsec / 1000000000.0;
     
-    if(*a)
+    if(*a == 1)
     {
       printf("frequency: %d \n", (nstop-nstart));
       clock_gettime(CLOCK_MONOTONIC, &new_start);
       nstart = (double)new_start.tv_nsec / 1000000000.0;
+      *a = 0;
     }
   }
 }
@@ -1062,7 +1048,7 @@ int main(int argc, char **argv)
 
        pthread_create(&threads[idx],               // pointer to thread descriptor
                       &rt_sched_attr[idx],         // use SPECIFIC SECHED_FIFO attributes
-                      freq_test,               // thread function entry point
+                      frequency_test,             // thread function entry point
                       (void *)&(threadParams[idx]) // parameters to pass in
                      );
 
