@@ -3,8 +3,8 @@ LIB_DIRS =
 CC=gcc
 
 CDEFS=
-CFLAGS= -O0 -pg -g -Wcpp $(INCLUDE_DIRS) $(CDEFS)
-LIBS= -lrt
+CFLAGS= -O0 -pg -g -Wcpp -lpthread $(INCLUDE_DIRS) $(CDEFS)
+LIBS= -lrt 
 
 HFILES= 
 CFILES= capture.c
