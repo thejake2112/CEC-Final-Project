@@ -33,7 +33,7 @@
 
 #define START_UP_FRAMES (8)
 #define LAST_FRAMES (1)
-#define CAPTURE_FRAMES (1800+LAST_FRAMES)
+#define CAPTURE_FRAMES (1800)
 #define FRAMES_TO_ACQUIRE (CAPTURE_FRAMES + START_UP_FRAMES + LAST_FRAMES)
 
 #define FRAMES_PER_SEC (1) 
@@ -273,7 +273,7 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
 // always ignore first 8 frames
 int framecnt=-8;
 
-unsigned char bigbuffer[(1280*960)];
+unsigned char bigbuffer[(660*500)];
 
 #define K 4.0
 
@@ -331,7 +331,6 @@ static void process_image(const void *p, int size)
             printf("Dump YUYV converted to YY size %d\n", size);
         }
 #endif
-
 
 
 }
