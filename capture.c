@@ -87,18 +87,19 @@ typedef struct
 
 // POSIX thread declarations and scheduling attributes
 //
-pthread_t threads[NUM_THREADS];
-threadParams_t threadParams[NUM_THREADS];
-pthread_attr_t rt_sched_attr[NUM_THREADS];
+pthread_t threads;
+threadParams_t threadParams;
+pthread_attr_t rt_sched_attr;
 int rt_max_prio, rt_min_prio;
-struct sched_param rt_param[NUM_THREADS];
+struct sched_param rt_param;
 struct sched_param main_param;
 pthread_attr_t main_attr;
 pid_t mainpid;
 
 
 // measure frequency
-void *frequency_test(void *threadp)
+/*
+void *frequency_test(void*)
 {
   struct timespec new_start, new_stop;
   clock_gettime(CLOCK_MONOTONIC, &new_start);
@@ -120,7 +121,7 @@ void *frequency_test(void *threadp)
     }
   }
 }
-
+*/
 void print_scheduler(void)
 {
    int schedType, scope;
@@ -1010,9 +1011,9 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
         }
     }
-    
+    /*
     int rc, idx;
-
+    
    printf("This system has %d processors with %d available\n", get_nprocs_conf(), get_nprocs());
    printf("The test thread created will be SCHED_FIFO is run with sudo and will be run on least busy core\n");
 
@@ -1035,26 +1036,23 @@ int main(int argc, char **argv)
    printf("rt_min_prio=%d\n", rt_min_prio);
 
 
-   for(idx=0; idx < NUM_THREADS; idx++)
-  {
-       rc=pthread_attr_init(&rt_sched_attr[idx]);
-       rc=pthread_attr_setinheritsched(&rt_sched_attr[idx], PTHREAD_EXPLICIT_SCHED);
-       rc=pthread_attr_setschedpolicy(&rt_sched_attr[idx], SCHED_FIFO);
+    rc=pthread_attr_init(&rt_sched_attr);
+       
+    rc=pthread_attr_setinheritsched(&rt_sched_attr, PTHREAD_EXPLICIT_SCHED);
+    rc=pthread_attr_setschedpolicy(&rt_sched_attr, SCHED_FIFO);
 
-       rt_param[idx].sched_priority=rt_max_prio-idx-1;
-       pthread_attr_setschedparam(&rt_sched_attr[idx], &rt_param[idx]);
+    rt_param.sched_priority=rt_max_prio-1;
+    pthread_attr_setschedparam(&rt_sched_attr, &rt_param);
 
-       threadParams[idx].threadIdx=idx;
-
-       pthread_create(&threads[idx],               // pointer to thread descriptor
-                      &rt_sched_attr[idx],         // use SPECIFIC SECHED_FIFO attributes
+    threadParams.threadIdx=0;
+        
+       
+       pthread_create(&threads,               // pointer to thread descriptor
+                      &rt_sched_attr,         // use SPECIFIC SECHED_FIFO attributes
                       frequency_test,             // thread function entry point
-                      (void *)&(threadParams[idx]) // parameters to pass in
+                      (void *)&(threadParams) // parameters to pass in
                      );
-
-   }
-
-   
+  */
     // initialization of V4L2
     open_device();
     init_device();
