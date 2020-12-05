@@ -98,7 +98,7 @@ pid_t mainpid;
 
 
 // measure frequency
-void *frequency_test(void*)
+void *frequency_test(void *threadp)
 {
   struct timespec new_start, new_stop;
   clock_gettime(CLOCK_MONOTONIC, &new_start);
@@ -1036,7 +1036,7 @@ int main(int argc, char **argv)
 
 
    for(idx=0; idx < NUM_THREADS; idx++)
-   {
+  {
        rc=pthread_attr_init(&rt_sched_attr[idx]);
        rc=pthread_attr_setinheritsched(&rt_sched_attr[idx], PTHREAD_EXPLICIT_SCHED);
        rc=pthread_attr_setschedpolicy(&rt_sched_attr[idx], SCHED_FIFO);
