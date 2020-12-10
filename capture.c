@@ -1,19 +1,23 @@
 #define _GNU_SOURCE
 
+// general libraries 
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
+// threading, semaphores, and time acquisition
 #include <pthread.h>
 #include <sched.h>
 #include <time.h>
 #include <semaphore.h>
 
+// create a syslog
 #include <syslog.h>
 #include <sys/time.h>
 #include <sys/sysinfo.h>
 #include <errno.h>
 
+// more misc. headers
 #include <signal.h>
 
 
@@ -32,6 +36,7 @@
 #include <linux/videodev2.h>
 
 
+// time constants
 #define USEC_PER_MSEC (1000)
 #define NANOSEC_PER_MSEC (1000000)
 #define NANOSEC_PER_SEC (1000000000)
@@ -50,20 +55,24 @@
 
 #define MAX_PIXEL_SIZE (3)
 
+// the resolution we want as well as the pixel size we want
 #define HRES (640)
 #define VRES (480)
 #define PIXEL_SIZE (2)
 #define HRES_STR "640"
 #define VRES_STR "480"
-
+#define MAX_HRES (1920)
+#define MAX_VRES (1080)
 
 #define STARTUP_FRAMES (30)
 #define LAST_FRAMES (1)
 #define CAPTURE_FRAMES (1800+LAST_FRAMES)
 #define FRAMES_TO_ACQUIRE (CAPTURE_FRAMES + STARTUP_FRAMES + LAST_FRAMES)
 
+// FPS
 #define FRAMES_PER_SEC (1)  
 
+// save frames with grayscale
 #define DUMP_FRAMES
 #define COLOR_CONVERT_GRAY
 
@@ -90,14 +99,17 @@ typedef struct
 
 void Sequencer(int id);
 
+// call prototype functions for threads
 void *Service_1_frame_acquisition(void *threadp);
 void *Service_2_frame_process(void *threadp);
 void *Service_3_frame_storage(void *threadp);
 
+// prototype functions that go into the threads
 int seq_frame_read(void);
 int seq_frame_process(void);
 int seq_frame_store(void);
 
+// more prototyp functions
 double getTimeMsec(void);
 double realtime(struct timespec *tsptr);
 void print_scheduler(void);
@@ -113,13 +125,14 @@ int v4l2_frame_acquisition_loop(char *dev_name);
 static struct v4l2_format fmt;
 struct v4l2_buffer frame_buf;
 
+// create a buffer with size given by the amount of frames per sec
 struct buffer 
 {
         void   *start;
         size_t  length;
 };
 
-
+// allocate each slot of the ring buffer by he size of the frame
 struct save_frame_t
 {
     unsigned char   frame[HRES*VRES*PIXEL_SIZE];
@@ -127,6 +140,7 @@ struct save_frame_t
     char identifier_str[80];
 };
 
+// upload save_frame_t to the ring buffer
 struct ring_buffer_t
 {
     unsigned int ring_size;
@@ -170,7 +184,7 @@ static int xioctl(int fh, int request, void *arg)
 }
 
 
-
+// dump the frame in pgm format with file name and header
 char pgm_header[]="P5\n#9999999999 sec 9999999999 msec \n"HRES_STR" "VRES_STR"\n255\n";
 char pgm_dumpname[]="frames/test0000.pgm";
 
@@ -259,9 +273,11 @@ int read_framecnt=-STARTUP_FRAMES;
 int process_framecnt=0;
 int save_framecnt=0;
 
-unsigned char scratchpad_buffer[HRES*VRES*MAX_PIXEL_SIZE];
+// allocate scratchpad buffer to store frame
+unsigned char scratchpad_buffer[MAX_HRES*MAX_VRES*MAX_PIXEL_SIZE];
 
 
+// save frame to memory
 static int save_image(const void *p, int size, struct timespec *frame_time)
 {
     int i, newi, newsize=0;
@@ -300,7 +316,7 @@ static int save_image(const void *p, int size, struct timespec *frame_time)
     return save_framecnt;
 }
 
-
+// iterating through the buffer and converting frames to grayscale
 static int process_image(const void *p, int size)
 {
     int i, newi, newsize=0;
@@ -342,7 +358,7 @@ static int process_image(const void *p, int size)
     return process_framecnt;
 }
 
-
+//capture frame and load it to buffer
 static int read_frame(void)
 {
     CLEAR(frame_buf);
@@ -385,7 +401,7 @@ static int read_frame(void)
     return 1;
 }
 
-
+// like frame read but with sequencer capabilities
 int seq_frame_read(void)
 {
     fd_set fds;
@@ -403,9 +419,6 @@ int seq_frame_read(void)
 
     read_frame();
 
-    // save off copy of image with time-stamp here
-    //printf("memcpy to %p from %p for %d bytes\n", (void *)&(ring_buffer.save_frame[ring_buffer.tail_idx].frame[0]), buffers[frame_buf.index].start, frame_buf.bytesused);
-    //syslog(LOG_CRIT, "memcpy to %p from %p for %d bytes\n", (void *)&(ring_buffer.save_frame[ring_buffer.tail_idx].frame[0]), buffers[frame_buf.index].start, frame_buf.bytesused);
     memcpy((void *)&(ring_buffer.save_frame[ring_buffer.tail_idx].frame[0]), buffers[frame_buf.index].start, frame_buf.bytesused);
 
     ring_buffer.tail_idx = (ring_buffer.tail_idx + 1) % ring_buffer.ring_size;
@@ -414,11 +427,9 @@ int seq_frame_read(void)
     clock_gettime(CLOCK_MONOTONIC, &time_now);
     fnow = (double)time_now.tv_sec + (double)time_now.tv_nsec / 1000000000.0;
 
+    // get frame count, FPS, and time to acquire frame
     if(read_framecnt > 0)
     {	
-        //printf("read_framecnt=%d, rb.tail=%d, rb.head=%d, rb.count=%d at %lf and %lf FPS", read_framecnt, ring_buffer.tail_idx, ring_buffer.head_idx, ring_buffer.count, (fnow-fstart), (double)(read_framecnt) / (fnow-fstart));
-
-        //syslog(LOG_CRIT, "read_framecnt=%d, rb.tail=%d, rb.head=%d, rb.count=%d at %lf and %lf FPS", read_framecnt, ring_buffer.tail_idx, ring_buffer.head_idx, ring_buffer.count, (fnow-fstart), (double)(read_framecnt) / (fnow-fstart));
         syslog(LOG_CRIT, "read_framecnt=%d at %lf and %lf FPS", read_framecnt, (fnow-fstart), (double)(read_framecnt) / (fnow-fstart));
     }
     else 
@@ -431,7 +442,7 @@ int seq_frame_read(void)
 }
 
 
-
+// frame_process with added sequencing capabilities
 int seq_frame_process(void)
 {
     int cnt;
@@ -462,7 +473,7 @@ int seq_frame_process(void)
     return cnt;
 }
 
-
+// save_frame with sequencer capabilities
 int seq_frame_store(void)
 {
     int cnt;
@@ -485,7 +496,7 @@ int seq_frame_store(void)
     return cnt;
 }
 
-
+// used in frame acquisition loop
 static void mainloop(void)
 {
     unsigned int count;
@@ -609,7 +620,7 @@ static void mainloop(void)
 
 }
 
-
+// stop capturing frames
 static void stop_capturing(void)
 {
     enum v4l2_buf_type type;
@@ -625,7 +636,7 @@ static void stop_capturing(void)
     printf("capture stopped\n");
 }
 
-
+// start capturing frames
 static void start_capturing(void)
 {
         unsigned int i;
@@ -824,18 +835,7 @@ static void init_device(char *dev_name)
         fmt.fmt.pix.height      = VRES;
 
         // Specify the Pixel Coding Formate here
-
-        // This one works for Logitech C200
         fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-
-        //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
-        //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_VYUY;
-
-        // Would be nice if camera supported
-        //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_GREY;
-        //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
-
-        //fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
         fmt.fmt.pix.field       = V4L2_FIELD_NONE;
 
         if (-1 == xioctl(camera_device_fd, VIDIOC_S_FMT, &fmt))
@@ -946,9 +946,6 @@ int v4l2_frame_acquisition_shutdown(void)
 
 
 
-
-
-
 void main(void)
 {
     struct timespec current_time_val, current_time_res;
@@ -1056,7 +1053,6 @@ void main(void)
     pthread_attr_setschedparam(&rt_sched_attr[0], &rt_param[0]);
     rc=pthread_create(&threads[0],               // pointer to thread descriptor
                       &rt_sched_attr[0],         // use specific attributes
-                      //(void *)0,               // default attributes
                       Service_1_frame_acquisition,                 // thread function entry point
                       (void *)&(threadParams[0]) // parameters to pass in
                      );
@@ -1087,14 +1083,6 @@ void main(void)
     else
         printf("pthread_create successful for service 3\n");
 
-
-    // Wait for service threads to initialize and await relese by sequencer.
-    //
-    // Note that the sleep is not necessary of RT service threads are created with 
-    // correct POSIX SCHED_FIFO priorities compared to non-RT priority of this main
-    // program.
-    //
-    // sleep(1);
  
     // Create Sequencer thread, which like a cyclic executive, is highest prio
     printf("Start sequencer\n");
@@ -1106,16 +1094,11 @@ void main(void)
 
     signal(SIGALRM, (void(*)()) Sequencer);
 
-
     /* arm the interval timer */
     itime.it_interval.tv_sec = 0;
     itime.it_interval.tv_nsec = 10000000;
     itime.it_value.tv_sec = 0;
     itime.it_value.tv_nsec = 10000000;
-    //itime.it_interval.tv_sec = 1;
-    //itime.it_interval.tv_nsec = 0;
-    //itime.it_value.tv_sec = 1;
-    //itime.it_value.tv_nsec = 0;
 
     timer_settime(timer_1, flags, &itime, &last_itime);
 
@@ -1160,10 +1143,6 @@ void Sequencer(int id)
            
     seqCnt++;
 
-    //clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
-    //printf("Sequencer on core %d for cycle %llu @ sec=%6.9lf\n", sched_getcpu(), seqCnt, current_realtime-start_realtime);
-    //syslog(LOG_CRIT, "Sequencer on core %d for cycle %llu @ sec=%6.9lf\n", sched_getcpu(), seqCnt, current_realtime-start_realtime);
-
 
     // Release each service at a sub-rate of the generic sequencer rate
 
@@ -1176,8 +1155,6 @@ void Sequencer(int id)
     // Service_3 @ 1 Hz
     if((seqCnt % 100) == 0) sem_post(&semS3);
 }
-
-
 
 
 void *Service_1_frame_acquisition(void *threadp)
@@ -1319,4 +1296,3 @@ void print_scheduler(void)
            printf("Pthread Policy is UNKNOWN\n"); exit(-1);
    }
 }
-
