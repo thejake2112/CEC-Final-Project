@@ -72,9 +72,10 @@
 // FPS
 #define FRAMES_PER_SEC (1)  
 
-// save frames with grayscale
+// save frames with grayscale and/or color
 #define DUMP_FRAMES
-#define COLOR_CONVERT_GRAY
+// #define COLOR_CONVERT_GRAY
+#define COLOR_CONVERT_RGB
 
 #define DRIVER_MMAP_BUFFERS (6)  // request buffers for delay
 
@@ -184,6 +185,41 @@ static int xioctl(int fh, int request, void *arg)
 }
 
 
+char ppm_header[]="P6\n#9999999999 sec 9999999999 msec \n"HRES_STR" "VRES_STR"\n255\n";
+char ppm_dumpname[]="frames/test0000.ppm";
+
+static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
+{
+    int written, i, total, dumpfd;
+   
+    snprintf(&ppm_dumpname[11], 9, "%04d", tag);
+    strncat(&ppm_dumpname[15], ".ppm", 5);
+    dumpfd = open(ppm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
+
+    snprintf(&ppm_header[4], 11, "%010d", (int)time->tv_sec);
+    strncat(&ppm_header[14], " sec ", 5);
+    snprintf(&ppm_header[19], 11, "%010d", (int)((time->tv_nsec)/1000000));
+    strncat(&ppm_header[29], " msec \n"HRES_STR" "VRES_STR"\n255\n", 19);
+
+    // subtract 1 from sizeof header because it includes the null terminator for the string
+    written=write(dumpfd, ppm_header, sizeof(ppm_header)-1);
+
+    total=0;
+
+    do
+    {
+        written=write(dumpfd, p, size);
+        total+=written;
+    } while(total < size);
+
+    clock_gettime(CLOCK_MONOTONIC, &time_now);
+    fnow = (double)time_now.tv_sec + (double)time_now.tv_nsec / 1000000000.0;
+    printf("Frame written to flash at %lf, %d, bytes\n", (fnow-fstart), total);
+
+    close(dumpfd);
+    
+}
+
 // dump the frame in pgm format with file name and header
 char pgm_header[]="P5\n#9999999999 sec 9999999999 msec \n"HRES_STR" "VRES_STR"\n255\n";
 char pgm_dumpname[]="frames/test0000.pgm";
@@ -276,7 +312,6 @@ int save_framecnt=0;
 // allocate scratchpad buffer to store frame
 unsigned char scratchpad_buffer[MAX_HRES*MAX_VRES*MAX_PIXEL_SIZE];
 
-
 // save frame to memory
 static int save_image(const void *p, int size, struct timespec *frame_time)
 {
@@ -297,7 +332,14 @@ static int save_image(const void *p, int size, struct timespec *frame_time)
     else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV)
     {
 
-#if defined(COLOR_CONVERT_GRAY)
+#if defined(COLOR_CONVERT_RGB)
+       
+        if(save_framecnt > 0) 
+        {
+            dump_ppm(frame_ptr, ((size*6)/4), save_framecnt, frame_time);
+            printf("Dump YUYV converted to RGB size %d\n", size);
+        }
+#elif defined(COLOR_CONVERT_GRAY)
         if(save_framecnt > 0)
         {
             dump_pgm(frame_ptr, (size/2), process_framecnt, frame_time);
@@ -307,6 +349,11 @@ static int save_image(const void *p, int size, struct timespec *frame_time)
 
     }
 
+    else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24)
+    {
+        printf("Dump RGB as-is size %d\n", size);
+        dump_ppm(frame_ptr, size, process_framecnt, frame_time);
+    }
     else
     {
         printf("ERROR - unknown dump format\n");
@@ -333,7 +380,18 @@ static int process_image(const void *p, int size)
 
     else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV)
     {
-#if defined(COLOR_CONVERT_GRAY)
+#if defined(COLOR_CONVERT_RGB)
+       
+        // Pixels are YU and YV alternating, so YUYV which is 4 bytes
+        // We want RGB, so RGBRGB which is 6 bytes
+        //
+        for(i=0, newi=0; i<size; i=i+4, newi=newi+6)
+        {
+            y_temp=(int)frame_ptr[i]; u_temp=(int)frame_ptr[i+1]; y2_temp=(int)frame_ptr[i+2]; v_temp=(int)frame_ptr[i+3];
+            yuv2rgb(y_temp, u_temp, v_temp, &scratchpad_buffer[newi], &scratchpad_buffer[newi+1], &scratchpad_buffer[newi+2]);
+            yuv2rgb(y2_temp, u_temp, v_temp, &scratchpad_buffer[newi+3], &scratchpad_buffer[newi+4], &scratchpad_buffer[newi+5]);
+        }
+#elif defined(COLOR_CONVERT_GRAY)
         // Pixels are YU and YV alternating, so YUYV which is 4 bytes
         // We want Y, so YY which is 2 bytes
         //
@@ -357,7 +415,6 @@ static int process_image(const void *p, int size)
 
     return process_framecnt;
 }
-
 //capture frame and load it to buffer
 static int read_frame(void)
 {
@@ -979,7 +1036,7 @@ void main(void)
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     clock_getres(MY_CLOCK_TYPE, &current_time_res); current_realtime_res=realtime(&current_time_res);
     printf("START High Rate Sequencer @ sec=%6.9lf with resolution %6.9lf\n", (current_realtime - start_realtime), current_realtime_res);
-    syslog(LOG_CRIT, "START High Rate Sequencer @ sec=%6.9lf with resolution %6.9lf\n", (current_realtime - start_realtime), current_realtime_res);
+    syslog(LOG_CRIT, "START High Rate Sequencer  sec %6.9lf with resolution %6.9lf\n", (current_realtime - start_realtime), current_realtime_res);
 
 
    printf("System has %d processors configured and %d available.\n", get_nprocs_conf(), get_nprocs());
@@ -1166,8 +1223,8 @@ void *Service_1_frame_acquisition(void *threadp)
 
     // Start up processing and resource initialization
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
-    syslog(LOG_CRIT, "S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
-    printf("S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
+    syslog(LOG_CRIT, "S1 thread sec %6.9lf\n", current_realtime-start_realtime);
+    printf("S1 thread sec %6.9lf\n", current_realtime-start_realtime);
 
     while(!abortS1) // check for synchronous abort request
     {
@@ -1182,7 +1239,7 @@ void *Service_1_frame_acquisition(void *threadp)
 
 	// on order of up to milliseconds of latency to get time
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
-        syslog(LOG_CRIT, "S1 at 25 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
+        syslog(LOG_CRIT, "S1 at 25 Hz on core %d for release %llu sec %6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
 
 	if(0) {abortTest=TRUE;};
     }
@@ -1202,7 +1259,7 @@ void *Service_2_frame_process(void *threadp)
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
-    syslog(LOG_CRIT, "S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
+    syslog(LOG_CRIT, "S2 thread sec %6.9lf\n", current_realtime-start_realtime);
     printf("S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
 
     while(!abortS2)
@@ -1216,7 +1273,7 @@ void *Service_2_frame_process(void *threadp)
 	process_cnt=seq_frame_process();
 
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
-        syslog(LOG_CRIT, "S2 at 1 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
+        syslog(LOG_CRIT, "S2 at 1 Hz on core %d for release %llu sec %6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
     }
 
     pthread_exit((void *)0);
@@ -1232,7 +1289,7 @@ void *Service_3_frame_storage(void *threadp)
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
-    syslog(LOG_CRIT, "S3 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
+    syslog(LOG_CRIT, "S3 thread sec %6.9lf\n", current_realtime-start_realtime);
     printf("S3 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
 
     while(!abortS3)
@@ -1246,7 +1303,7 @@ void *Service_3_frame_storage(void *threadp)
 	store_cnt=seq_frame_store();
 
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
-        syslog(LOG_CRIT, "S3 at 1 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S3Cnt, current_realtime-start_realtime);
+        syslog(LOG_CRIT, "S3 at 1 Hz on core %d for release %llu sec %6.9lf\n", sched_getcpu(), S3Cnt, current_realtime-start_realtime);
 
 	// after last write, set synchronous abort
 	if(store_cnt == 1800) {abortTest=TRUE;};
